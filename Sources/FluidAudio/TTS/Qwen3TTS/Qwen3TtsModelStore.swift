@@ -42,37 +42,36 @@ public actor Qwen3TtsModelStore {
 
         logger.info("Loading Qwen3-TTS CoreML models from \(directory.path)...")
 
-        // Embedding models and SpeechDecoder use CPU+GPU (float32)
-        let f32Config = MLModelConfiguration()
-        f32Config.computeUnits = .cpuAndGPU
+        // Optimized compute unit configs based on profiling
+        let cpuOnlyConfig = MLModelConfiguration()
+        cpuOnlyConfig.computeUnits = .cpuOnly
 
-        // CodeDecoder also uses CPU+GPU to prevent inf/NaN from ANE float16 overflow
-        let allConfig = MLModelConfiguration()
-        allConfig.computeUnits = .cpuAndGPU
+        let cpuAndGpuConfig = MLModelConfiguration()
+        cpuAndGpuConfig.computeUnits = .cpuAndGPU
+
+        let aneConfig = MLModelConfiguration()
+        aneConfig.computeUnits = .cpuAndNeuralEngine
 
         let loadStart = Date()
 
         textProjectorModel = try loadModel(
             at: directory.appendingPathComponent(ModelNames.Qwen3TTS.textProjectorFile),
-            config: f32Config, name: "TextProjector")
+            config: cpuOnlyConfig, name: "TextProjector")
         codeEmbedderModel = try loadModel(
             at: directory.appendingPathComponent(ModelNames.Qwen3TTS.codeEmbedderFile),
-            config: f32Config, name: "CodeEmbedder")
+            config: cpuOnlyConfig, name: "CodeEmbedder")
         multiCodeEmbedderModel = try loadModel(
             at: directory.appendingPathComponent(ModelNames.Qwen3TTS.multiCodeEmbedderFile),
-            config: f32Config, name: "MultiCodeEmbedder")
+            config: cpuOnlyConfig, name: "MultiCodeEmbedder")
         codeDecoderModel = try loadModel(
             at: directory.appendingPathComponent(ModelNames.Qwen3TTS.codeDecoderFile),
-            config: allConfig, name: "CodeDecoder")
-        // MultiCodeDecoder MUST use CPU_ONLY (all other configs produce NaN)
-        let mcdConfig = MLModelConfiguration()
-        mcdConfig.computeUnits = .cpuOnly
+            config: aneConfig, name: "CodeDecoder")
         multiCodeDecoderModel = try loadModel(
             at: directory.appendingPathComponent(ModelNames.Qwen3TTS.multiCodeDecoderFile),
-            config: mcdConfig, name: "MultiCodeDecoder")
+            config: aneConfig, name: "MultiCodeDecoder")
         speechDecoderModel = try loadModel(
             at: directory.appendingPathComponent(ModelNames.Qwen3TTS.speechDecoderFile),
-            config: f32Config, name: "SpeechDecoder")
+            config: cpuAndGpuConfig, name: "SpeechDecoder")
 
         // Load optional speaker embedding
         let speakerURL = directory.appendingPathComponent(

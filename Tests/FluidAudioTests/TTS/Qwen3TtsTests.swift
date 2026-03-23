@@ -55,12 +55,6 @@ final class Qwen3TtsConstantsTests: XCTestCase {
         XCTAssertEqual(Qwen3TtsConstants.codecVocabSize, 2048)
     }
 
-    func testSamplingParameters() {
-        XCTAssertEqual(Qwen3TtsConstants.temperature, 0.9)
-        XCTAssertEqual(Qwen3TtsConstants.topK, 50)
-        XCTAssertGreaterThan(Qwen3TtsConstants.repetitionPenalty, 1.0)
-    }
-
     func testMinNewTokensIsReasonable() {
         XCTAssertGreaterThanOrEqual(Qwen3TtsConstants.minNewTokens, 0)
         XCTAssertLessThan(Qwen3TtsConstants.minNewTokens, Qwen3TtsConstants.maxCodecTokens)

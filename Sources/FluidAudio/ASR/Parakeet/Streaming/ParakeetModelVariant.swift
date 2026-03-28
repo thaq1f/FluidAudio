@@ -22,10 +22,6 @@ public enum StreamingModelVariant: String, CaseIterable, Sendable {
 
     // MARK: - Nemotron Speech Streaming (cache-aware streaming, 0.6B params)
 
-    /// Nemotron 0.6B with 80ms chunks (ultra-low latency)
-    case nemotron80ms = "nemotron-80ms"
-    /// Nemotron 0.6B with 160ms chunks (very low latency)
-    case nemotron160ms = "nemotron-160ms"
     /// Nemotron 0.6B with 560ms chunks (balanced)
     case nemotron560ms = "nemotron-560ms"
     /// Nemotron 0.6B with 1120ms chunks (best accuracy)
@@ -37,8 +33,6 @@ public enum StreamingModelVariant: String, CaseIterable, Sendable {
         case .parakeetEou160ms: return "Parakeet EOU 120M (160ms)"
         case .parakeetEou320ms: return "Parakeet EOU 120M (320ms)"
         case .parakeetEou1280ms: return "Parakeet EOU 120M (1280ms)"
-        case .nemotron80ms: return "Nemotron 0.6B (80ms)"
-        case .nemotron160ms: return "Nemotron 0.6B (160ms)"
         case .nemotron560ms: return "Nemotron 0.6B (560ms)"
         case .nemotron1120ms: return "Nemotron 0.6B (1120ms)"
         }
@@ -50,8 +44,6 @@ public enum StreamingModelVariant: String, CaseIterable, Sendable {
         case .parakeetEou160ms: return .parakeetEou160
         case .parakeetEou320ms: return .parakeetEou320
         case .parakeetEou1280ms: return .parakeetEou1280
-        case .nemotron80ms: return .nemotronStreaming80
-        case .nemotron160ms: return .nemotronStreaming160
         case .nemotron560ms: return .nemotronStreaming560
         case .nemotron1120ms: return .nemotronStreaming1120
         }
@@ -62,7 +54,7 @@ public enum StreamingModelVariant: String, CaseIterable, Sendable {
         switch self {
         case .parakeetEou160ms, .parakeetEou320ms, .parakeetEou1280ms:
             return .parakeetEou
-        case .nemotron80ms, .nemotron160ms, .nemotron560ms, .nemotron1120ms:
+        case .nemotron560ms, .nemotron1120ms:
             return .nemotron
         }
     }
@@ -80,8 +72,6 @@ public enum StreamingModelVariant: String, CaseIterable, Sendable {
     /// The streaming chunk size for Nemotron variants (nil for non-Nemotron)
     public var nemotronChunkSize: NemotronChunkSize? {
         switch self {
-        case .nemotron80ms: return .ms80
-        case .nemotron160ms: return .ms160
         case .nemotron560ms: return .ms560
         case .nemotron1120ms: return .ms1120
         default: return nil

@@ -79,9 +79,19 @@ jobs:
 
             echo "MEDIAN_RTFx=$MEDIAN_RTFx" >> $GITHUB_OUTPUT
             echo "OVERALL_RTFx=$OVERALL_RTFx" >> $GITHUB_OUTPUT
+
+            # Fail if RTFx is 0 or N/A - indicates benchmark failure
+            if [ "$MEDIAN_RTFx" = "N/A" ] || [ "$MEDIAN_RTFx" = "0.00" ] || [ "$OVERALL_RTFx" = "N/A" ] || [ "$OVERALL_RTFx" = "0.00" ]; then
+              echo "❌ CRITICAL: RTFx is 0 or N/A - benchmark failed to produce valid results"
+              echo "Median RTFx: $MEDIAN_RTFx"
+              echo "Overall RTFx: $OVERALL_RTFx"
+              exit 1
+            fi
           else
+            echo "❌ CRITICAL: Results file not found - benchmark failed"
             echo "MEDIAN_RTFx=N/A" >> $GITHUB_OUTPUT
             echo "OVERALL_RTFx=N/A" >> $GITHUB_OUTPUT
+            exit 1
           fi
 
           EXECUTION_TIME=$(( ($(date +%s) - BENCHMARK_START) / 60 ))m$(( ($(date +%s) - BENCHMARK_START) % 60 ))s

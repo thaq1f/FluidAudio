@@ -48,11 +48,9 @@ public actor SlidingWindowAsrManager {
 
     // Vocabulary boosting
     // These are initialized via configureVocabularyBoosting() before start()
-    // CtcKeywordSpotter and VocabularyRescorer contain CoreML models which are not Sendable.
-    // We manage the safety ourselves by only accessing them from within the actor.
     private var customVocabulary: CustomVocabularyContext?
-    nonisolated(unsafe) private var ctcSpotter: CtcKeywordSpotter?
-    nonisolated(unsafe) private var vocabularyRescorer: VocabularyRescorer?
+    private var ctcSpotter: CtcKeywordSpotter?
+    private var vocabularyRescorer: VocabularyRescorer?
     private var vocabSizeConfig: ContextBiasingConstants.VocabSizeConfig?
     private var vocabBoostingEnabled: Bool { customVocabulary != nil && vocabularyRescorer != nil }
 
@@ -376,7 +374,7 @@ public actor SlidingWindowAsrManager {
             // Start frame offset is now handled by decoder's timeJump mechanism
 
             // Call AsrManager directly with deduplication
-            let (tokens, timestamps, confidences, _) = try await asrManager.transcribeStreamingChunk(
+            let (tokens, timestamps, confidences, _) = try await asrManager.transcribeChunk(
                 windowSamples,
                 source: audioSource,
                 previousTokens: accumulatedTokens,

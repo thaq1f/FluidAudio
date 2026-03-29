@@ -1,6 +1,5 @@
 @preconcurrency import CoreML
 import Foundation
-import OSLog
 
 /// ASR model version enum
 public enum AsrModelVersion: Sendable {
@@ -331,8 +330,6 @@ extension AsrModels {
         return try await load(from: targetDir, configuration: configuration, progressHandler: progressHandler)
     }
 
-    /// Load models with ANE-optimized configurations
-
     private static func describeComputeUnits(_ units: MLComputeUnits) -> String {
         switch units {
         case .cpuOnly:
@@ -348,41 +345,20 @@ extension AsrModels {
         }
     }
 
-    public static func loadWithANEOptimization(
-        from directory: URL? = nil,
-        enableFP16: Bool = true
-    ) async throws -> AsrModels {
-        let targetDir = directory ?? defaultCacheDirectory()
-
-        logger.info("Loading ASR models with ANE optimization from: \(targetDir.path)")
-
-        // Use the load method that already applies per-model optimizations
-        return try await load(from: targetDir, configuration: nil)
-    }
-
     public static func defaultConfiguration() -> MLModelConfiguration {
-        let config = MLModelConfiguration()
-        config.allowLowPrecisionAccumulationOnGPU = true
         // Prefer Neural Engine across platforms for ASR inference to avoid GPU dispatch.
-        config.computeUnits = .cpuAndNeuralEngine
-        return config
+        MLModelConfigurationUtils.defaultConfiguration(computeUnits: .cpuAndNeuralEngine)
     }
 
-    /// Create optimized configuration for specific model type
+    /// Create optimized configuration for model inference
     public static func optimizedConfiguration(
-        for modelType: ANEOptimizer.ModelType,
         enableFP16: Bool = true
     ) -> MLModelConfiguration {
-        let config = MLModelConfiguration()
-        config.allowLowPrecisionAccumulationOnGPU = enableFP16
-        config.computeUnits = ANEOptimizer.optimalComputeUnits(for: modelType)
-
-        // Enable model-specific optimizations
         let isCI = ProcessInfo.processInfo.environment["CI"] != nil
-        if isCI {
-            config.computeUnits = .cpuOnly
-        }
-
+        let config = MLModelConfigurationUtils.defaultConfiguration(
+            computeUnits: isCI ? .cpuOnly : .cpuAndNeuralEngine
+        )
+        config.allowLowPrecisionAccumulationOnGPU = enableFP16
         return config
     }
 
@@ -536,14 +512,7 @@ extension AsrModels {
     }
 
     public static func defaultCacheDirectory(for version: AsrModelVersion = .v3) -> URL {
-        let appSupport = FileManager.default.urls(
-            for: .applicationSupportDirectory, in: .userDomainMask
-        ).first!
-        return
-            appSupport
-            .appendingPathComponent("FluidAudio", isDirectory: true)
-            .appendingPathComponent("Models", isDirectory: true)
-            .appendingPathComponent(version.repo.folderName, isDirectory: true)
+        MLModelConfigurationUtils.defaultModelsDirectory(for: version.repo)
     }
 
     // Legacy method for backward compatibility

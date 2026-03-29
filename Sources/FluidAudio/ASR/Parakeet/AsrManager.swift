@@ -3,11 +3,6 @@ import AVFoundation
 import Foundation
 import OSLog
 
-public enum AudioSource: Sendable {
-    case microphone
-    case system
-}
-
 public actor AsrManager {
 
     internal let logger = AppLogger(category: "ASR")
@@ -24,13 +19,11 @@ public actor AsrManager {
 
     internal let progressEmitter = ProgressEmitter()
 
-    /// Get the number of decoder layers for the current model.
+    /// Number of decoder layers for the current model.
     /// Returns 2 if models not loaded (v2/v3 default, tdtCtc110m uses 1).
-    internal func getDecoderLayers() -> Int {
-        return asrModels?.version.decoderLayers ?? 2
+    internal var decoderLayerCount: Int {
+        asrModels?.version.decoderLayers ?? 2
     }
-
-    /// Token duration optimization model
 
     /// Cached vocabulary loaded once during initialization
     internal var vocabulary: [Int: String] = [:]
@@ -41,17 +34,25 @@ public actor AsrManager {
     }
     #endif
 
-    // TODO:: the decoder state should be moved higher up in the API interface
+    // Per-source decoder states are actor-internal; callers reset via resetDecoderState().
     internal var microphoneDecoderState: TdtDecoderState
     internal var systemDecoderState: TdtDecoderState
 
-    // Vocabulary boosting state (configured via configureVocabularyBoosting)
-    // Internal access required for AsrTranscription extension (separate file)
-    internal var customVocabulary: CustomVocabularyContext?
-    internal var ctcSpotter: CtcKeywordSpotter?
-    internal var vocabularyRescorer: VocabularyRescorer?
-    internal var vocabSizeConfig: ContextBiasingConstants.VocabSizeConfig?
-    internal var vocabBoostingEnabled: Bool { customVocabulary != nil && vocabularyRescorer != nil }
+    /// Get decoder state for a given audio source.
+    internal func decoderState(for source: AudioSource) -> TdtDecoderState {
+        switch source {
+        case .microphone: return microphoneDecoderState
+        case .system: return systemDecoderState
+        }
+    }
+
+    /// Set decoder state for a given audio source.
+    internal func setDecoderState(_ state: TdtDecoderState, for source: AudioSource) {
+        switch source {
+        case .microphone: microphoneDecoderState = state
+        case .system: systemDecoderState = state
+        }
+    }
 
     // Cached CTC logits from fused Preprocessor (unified custom vocabulary)
     internal var cachedCtcLogits: MLMultiArray?
@@ -60,6 +61,13 @@ public actor AsrManager {
 
     /// Whether the Preprocessor outputs CTC logits (unified custom vocabulary model).
     public var hasCachedCtcLogits: Bool { cachedCtcLogits != nil }
+
+    /// Clear all cached CTC data (logits, frame duration, valid frames).
+    internal func clearCachedCtcData() {
+        cachedCtcLogits = nil
+        cachedCtcFrameDuration = nil
+        cachedCtcValidFrames = nil
+    }
 
     /// Get cached CTC raw logits as [[Float]] for external use (e.g. benchmarks).
     /// These are raw logits — callers must apply `CtcKeywordSpotter.applyLogSoftmax()`
@@ -120,7 +128,7 @@ public actor AsrManager {
     /// Only one session is supported at a time.
     public var transcriptionProgressStream: AsyncThrowingStream<Double, Error> {
         get async {
-            await progressEmitter.currentStream()
+            await progressEmitter.ensureSession()
         }
     }
 
@@ -155,55 +163,6 @@ public actor AsrManager {
         self.systemDecoderState = TdtDecoderState.make(decoderLayers: layers)
 
         logger.info("AsrManager initialized successfully with provided models")
-    }
-
-    /// Configure vocabulary boosting for batch transcription.
-    ///
-    /// When configured, vocabulary terms will be automatically rescored after each `transcribe()` call
-    /// using CTC-based constrained decoding. The resulting `ASRResult` will have `ctcDetectedTerms`
-    /// and `ctcAppliedTerms` populated.
-    ///
-    /// - Parameters:
-    ///   - vocabulary: Custom vocabulary context with terms to detect
-    ///   - ctcModels: Pre-loaded CTC models for keyword spotting
-    ///   - config: Optional rescorer configuration (default: vocabulary-size-aware config)
-    /// - Throws: Error if rescorer initialization fails
-    public func configureVocabularyBoosting(
-        vocabulary: CustomVocabularyContext,
-        ctcModels: CtcModels,
-        config: VocabularyRescorer.Config? = nil
-    ) async throws {
-        self.customVocabulary = vocabulary
-
-        let blankId = ctcModels.vocabulary.count
-        self.ctcSpotter = CtcKeywordSpotter(models: ctcModels, blankId: blankId)
-
-        let vocabSize = vocabulary.terms.count
-        let vocabConfig = ContextBiasingConstants.rescorerConfig(forVocabSize: vocabSize)
-        self.vocabSizeConfig = vocabConfig
-        let effectiveConfig = config ?? .default
-
-        let ctcModelDir = CtcModels.defaultCacheDirectory(for: ctcModels.variant)
-        self.vocabularyRescorer = try await VocabularyRescorer.create(
-            spotter: ctcSpotter!,
-            vocabulary: vocabulary,
-            config: effectiveConfig,
-            ctcModelDirectory: ctcModelDir
-        )
-
-        let isLargeVocab = vocabSize > ContextBiasingConstants.largeVocabThreshold
-        logger.info(
-            "Vocabulary boosting configured with \(vocabSize) terms (isLargeVocab: \(isLargeVocab))"
-        )
-    }
-
-    /// Disable vocabulary boosting and release CTC models.
-    public func disableVocabularyBoosting() {
-        customVocabulary = nil
-        ctcSpotter = nil
-        vocabularyRescorer = nil
-        vocabSizeConfig = nil
-        logger.info("Vocabulary boosting disabled")
     }
 
     private func createFeatureProvider(
@@ -275,16 +234,7 @@ public actor AsrManager {
             throw ASRError.notInitialized
         }
 
-        // Get the appropriate decoder state
-        var state: TdtDecoderState
-        switch source {
-        case .microphone:
-            state = microphoneDecoderState
-        case .system:
-            state = systemDecoderState
-        }
-
-        // Reset the existing decoder state to clear all cached values including predictorOutput
+        var state = decoderState(for: source)
         state.reset()
 
         let initDecoderInput = try prepareDecoderInput(
@@ -298,40 +248,7 @@ public actor AsrManager {
         )
 
         state.update(from: initDecoderOutput)
-
-        // Store back
-        switch source {
-        case .microphone:
-            microphoneDecoderState = state
-        case .system:
-            systemDecoderState = state
-        }
-    }
-
-    private func loadModel(
-        path: URL,
-        name: String,
-        configuration: MLModelConfiguration
-    ) async throws -> MLModel {
-        do {
-            let model = try MLModel(contentsOf: path, configuration: configuration)
-            return model
-        } catch {
-            logger.error("Failed to load \(name) model: \(error)")
-
-            throw ASRError.modelLoadFailed
-        }
-    }
-    private static func getDefaultModelsDirectory() -> URL {
-        let applicationSupportURL = FileManager.default.urls(
-            for: .applicationSupportDirectory, in: .userDomainMask
-        ).first!
-        let appDirectory = applicationSupportURL.appendingPathComponent(
-            "FluidAudio", isDirectory: true)
-        let directory = appDirectory.appendingPathComponent("Models/Parakeet", isDirectory: true)
-
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        return directory.standardizedFileURL
+        setDecoderState(state, for: source)
     }
 
     public func resetState() {
@@ -339,9 +256,7 @@ public actor AsrManager {
         let layers = asrModels?.version.decoderLayers ?? 2
         microphoneDecoderState = TdtDecoderState.make(decoderLayers: layers)
         systemDecoderState = TdtDecoderState.make(decoderLayers: layers)
-        cachedCtcLogits = nil
-        cachedCtcFrameDuration = nil
-        cachedCtcValidFrames = nil
+        clearCachedCtcData()
         Task { await sharedMLArrayCache.clear() }
     }
 
@@ -356,11 +271,7 @@ public actor AsrManager {
         // Reset decoder states using fresh allocations for deterministic behavior
         microphoneDecoderState = TdtDecoderState.make(decoderLayers: layers)
         systemDecoderState = TdtDecoderState.make(decoderLayers: layers)
-        // Release vocabulary boosting resources and cached CTC data
-        cachedCtcLogits = nil
-        cachedCtcFrameDuration = nil
-        cachedCtcValidFrames = nil
-        disableVocabularyBoosting()
+        clearCachedCtcData()
         Task { await sharedMLArrayCache.clear() }
         logger.info("AsrManager resources cleaned up")
     }
@@ -467,7 +378,7 @@ public actor AsrManager {
             let estimatedSamples = Int((Double(audioFile.length) * sampleRateRatio).rounded(.up))
 
             if estimatedSamples > config.streamingThreshold {
-                return try await transcribeStreaming(url, source: source)
+                return try await transcribeDiskBacked(url, source: source)
             }
         }
 
@@ -476,30 +387,30 @@ public actor AsrManager {
         return result
     }
 
-    /// Transcribe audio from a file URL using streaming mode.
+    /// Transcribe audio from a file URL using disk-backed chunked processing.
     ///
-    /// Memory-efficient transcription that processes audio in chunks, maintaining constant
-    /// memory usage (~1.2MB) regardless of file size. Ideal for long audio files.
+    /// Memory-efficient transcription that memory-maps the file and processes audio in chunks,
+    /// maintaining constant memory usage (~1.2MB) regardless of file size. Ideal for long audio files.
     ///
     /// - Parameters:
     ///   - url: The URL to the audio file
     ///   - source: The audio source type (defaults to .system)
     /// - Returns: An ASRResult containing the transcribed text and token timings
     /// - Throws: ASRError if transcription fails, models are not initialized, or the file cannot be read
-    public func transcribeStreaming(_ url: URL, source: AudioSource = .system) async throws -> ASRResult {
+    public func transcribeDiskBacked(_ url: URL, source: AudioSource = .system) async throws -> ASRResult {
         guard isAvailable else { throw ASRError.notInitialized }
 
         let startTime = Date()
 
         // Create a disk-backed source for memory-efficient access
-        let factory = StreamingAudioSourceFactory()
+        let factory = AudioSourceFactory()
         let (sampleSource, _) = try factory.makeDiskBackedSource(
             from: url,
             targetSampleRate: config.sampleRate
         )
 
         let totalSamples = sampleSource.sampleCount
-        guard totalSamples >= 16_000 else {
+        guard totalSamples >= config.sampleRate else {
             sampleSource.cleanup()
             throw ASRError.invalidAudioData
         }
@@ -589,53 +500,18 @@ public actor AsrManager {
         try await initializeDecoderState(for: source)
     }
 
-    internal func normalizedTimingToken(_ token: String) -> String {
+    nonisolated internal func normalizedTimingToken(_ token: String) -> String {
         token.replacingOccurrences(of: "▁", with: " ")
     }
 
-    internal func convertTokensWithExistingTimings(
-        _ tokenIds: [Int], timings: [TokenTiming]
-    ) -> (
-        text: String, timings: [TokenTiming]
-    ) {
-        guard !tokenIds.isEmpty else { return ("", []) }
+    /// Decode token IDs to text using SentencePiece conventions.
+    internal func convertTokensToText(_ tokenIds: [Int]) -> String {
+        guard !tokenIds.isEmpty else { return "" }
 
-        // SentencePiece-compatible decoding algorithm:
-        // 1. Convert token IDs to token strings
-        var tokens: [String] = []
-        var tokenInfos: [(token: String, tokenId: Int, timing: TokenTiming?)] = []
-
-        for (index, tokenId) in tokenIds.enumerated() {
-            if let token = vocabulary[tokenId], !token.isEmpty {
-                tokens.append(token)
-                let timing = index < timings.count ? timings[index] : nil
-                tokenInfos.append((token: token, tokenId: tokenId, timing: timing))
-            }
-        }
-
-        // 2. Concatenate all tokens (this is how SentencePiece works)
-        let concatenated = tokens.joined()
-
-        // 3. Replace ▁ with space (SentencePiece standard)
-        let text = concatenated.replacingOccurrences(of: "▁", with: " ")
+        let tokens = tokenIds.compactMap { vocabulary[$0] }.filter { !$0.isEmpty }
+        return tokens.joined()
+            .replacingOccurrences(of: "▁", with: " ")
             .trimmingCharacters(in: .whitespaces)
-
-        // 4. For now, return original timings as-is
-        // Note: Proper timing alignment would require tracking character positions
-        // through the concatenation and replacement process
-        let adjustedTimings = tokenInfos.compactMap { info in
-            info.timing.map { timing in
-                TokenTiming(
-                    token: normalizedTimingToken(info.token),
-                    tokenId: info.tokenId,
-                    startTime: timing.startTime,
-                    endTime: timing.endTime,
-                    confidence: timing.confidence
-                )
-            }
-        }
-
-        return (text, adjustedTimings)
     }
 
     nonisolated internal func extractFeatureValue(

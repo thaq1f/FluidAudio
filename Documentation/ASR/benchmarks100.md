@@ -2,6 +2,18 @@
 
 Benchmark comparison between `main` and PR #440 (`standardize-asr-directory-structure`) to verify the directory restructuring introduces no regressions.
 
+## Reproduction
+
+All batch TDT and CTC earnings benchmarks can be reproduced with [`Scripts/parakeet_subset_benchmark.sh`](../../Scripts/parakeet_subset_benchmark.sh):
+
+```bash
+# Download models and datasets (requires internet)
+./Scripts/parakeet_subset_benchmark.sh --download
+
+# Run all 4 benchmarks offline (100 files each, sleep-prevented)
+./Scripts/parakeet_subset_benchmark.sh
+```
+
 ## Environment
 
 - **Hardware**: MacBook Air M2, 16 GB

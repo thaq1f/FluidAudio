@@ -1,9 +1,7 @@
-import CoreML
 import Foundation
-import OSLog
 
 struct ChunkProcessor {
-    let sampleSource: StreamingAudioSampleSource
+    let sampleSource: AudioSampleSource
     let totalSamples: Int
 
     private let logger = AppLogger(category: "ChunkProcessor")
@@ -18,7 +16,6 @@ struct ChunkProcessor {
     // Stateless chunking aligned with CoreML reference:
     // - process ~14.96s of audio per window (frame-aligned) to stay under encoder limit
     // - 2.0s overlap (frame-aligned) to give the decoder slack when merging windows
-    private let sampleRate: Int = 16000
     private let overlapSeconds: Double = 2.0
 
     /// Context samples prepended from previous chunk for mel spectrogram stability (80ms = 1 encoder frame).
@@ -36,7 +33,7 @@ struct ChunkProcessor {
         return raw / ASRConstants.samplesPerEncoderFrame * ASRConstants.samplesPerEncoderFrame
     }
     private var overlapSamples: Int {
-        let requested = Int(overlapSeconds * Double(sampleRate))
+        let requested = Int(overlapSeconds * Double(ASRConstants.sampleRate))
         let capped = min(requested, chunkSamples / 2)
         return capped / ASRConstants.samplesPerEncoderFrame * ASRConstants.samplesPerEncoderFrame
     }
@@ -46,7 +43,7 @@ struct ChunkProcessor {
     }
 
     /// Initialize with a streaming audio sample source for memory-efficient processing.
-    init(sampleSource: StreamingAudioSampleSource) {
+    init(sampleSource: AudioSampleSource) {
         self.sampleSource = sampleSource
         self.totalSamples = sampleSource.sampleCount
     }
@@ -66,7 +63,7 @@ struct ChunkProcessor {
         var chunkStart = 0
         var chunkIndex = 0
         var chunkDecoderState = TdtDecoderState.make(
-            decoderLayers: await manager.getDecoderLayers()
+            decoderLayers: await manager.decoderLayerCount
         )
 
         while chunkStart < totalSamples {
@@ -219,7 +216,7 @@ struct ChunkProcessor {
         if left.isEmpty { return right }
         if right.isEmpty { return left }
 
-        let frameDuration = Double(ASRConstants.samplesPerEncoderFrame) / Double(sampleRate)
+        let frameDuration = ASRConstants.secondsPerEncoderFrame
         let overlapDuration = overlapSeconds
         let halfOverlapWindow = overlapDuration / 2
 
@@ -433,7 +430,7 @@ struct ChunkProcessor {
         frameDuration: Double
     ) -> [TokenWindow] {
         let cutoff = (leftEndTime + rightStartTime) / 2
-        let trimmedLeft = left.filter { Double($0.timestamp) * frameDuration <= cutoff }
+        let trimmedLeft = left.filter { Double($0.timestamp) * frameDuration < cutoff }
         let trimmedRight = right.filter { Double($0.timestamp) * frameDuration >= cutoff }
         return trimmedLeft + trimmedRight
     }
